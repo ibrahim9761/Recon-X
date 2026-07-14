@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>ReconX — Open-Source Intelligence Console</title>
+<meta name="description" content="Look up domain WHOIS, IP geolocation, DNS records and URL/SSL reputation — free public data, no signup." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2245%22 fill=%22%230B0F14%22/><circle cx=%2250%22 cy=%2250%22 r=%2230%22 fill=%22none%22 stroke=%22%2345E6D1%22 stroke-width=%224%22/><circle cx=%2250%22 cy=%2250%22 r=%224%22 fill=%22%2345E6D1%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="scanlines" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#" aria-label="ReconX home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="34" height="34">
+          <circle cx="24" cy="24" r="20" class="mark-ring-outer"/>
+          <circle cx="24" cy="24" r="13" class="mark-ring-inner"/>
+          <circle cx="24" cy="24" r="2.6" class="mark-dot"/>
+          <line x1="24" y1="24" x2="24" y2="6" class="mark-sweep"/>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">Recon<span class="accent">X</span></span>
+        <span class="brand-tag">osint console</span>
+      </span>
+    </a>
+
+    <nav class="status-nav" aria-label="Data source status">
+      <span class="pulse-dot" aria-hidden="true"></span>
+      <span>live public sources</span>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero wrap">
+    <p class="eyebrow">domain · ip · dns · url — one console</p>
+    <h1>Point it at a target.<br>Read what's public.</h1>
+    <p class="hero-sub">ReconX queries official free registries and network APIs in real time — RDAP, ip-api, live DNS resolution and TLS handshakes. No scraping, no scanning ports, nothing installed.</p>
+
+    <div class="tool-tabs" role="tablist" aria-label="Reconnaissance tools">
+      <button class="tab active" data-tool="domain" role="tab" aria-selected="true">Domain</button>
+      <button class="tab" data-tool="ip" role="tab" aria-selected="false">IP</button>
+      <button class="tab" data-tool="dns" role="tab" aria-selected="false">DNS</button>
+      <button class="tab" data-tool="url" role="tab" aria-selected="false">URL</button>
+    </div>
+
+    <form id="searchForm" class="search-panel" autocomplete="off">
+      <span class="search-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </span>
+      <input id="searchInput" type="text" placeholder="example.com" aria-label="Target to look up" />
+      <button type="submit" class="run-btn" id="runBtn">
+        <span class="run-label">Run scan</span>
+        <span class="run-spinner" aria-hidden="true"></span>
+      </button>
+    </form>
+    <button type="button" id="myIpBtn" class="link-btn">use my IP address instead →</button>
+  </section>
+
+  <section class="wrap results-zone" id="resultsZone" aria-live="polite">
+    <div class="empty-state" id="emptyState">
+      <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p>Results will appear here — try <button class="chip" data-fill="google.com">google.com</button>, <button class="chip" data-fill="8.8.8.8" data-tool="ip">8.8.8.8</button>, or <button class="chip" data-fill="https://wikipedia.org" data-tool="url">wikipedia.org</button></p>
+    </div>
+    <div id="output"></div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark small" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="22" height="22">
+          <circle cx="24" cy="24" r="20" class="mark-ring-outer"/>
+          <circle cx="24" cy="24" r="13" class="mark-ring-inner"/>
+          <circle cx="24" cy="24" r="2.6" class="mark-dot"/>
+        </svg>
+      </span>
+      <span>Recon<span class="accent">X</span></span>
+    </div>
+    <p class="footer-sources">Data via <a href="https://rdap.org" target="_blank" rel="noopener">RDAP</a>, <a href="https://ip-api.com" target="_blank" rel="noopener">ip-api.com</a>, live DNS &amp; TLS resolution, and <a href="https://urlscan.io" target="_blank" rel="noopener">urlscan.io</a>. All free, official, public endpoints — used for lawful lookups on assets you're authorized to inspect.</p>
+    <p class="footer-copy">© <span id="year"></span> ReconX — an OSINT reference console.</p>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
