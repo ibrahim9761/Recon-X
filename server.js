@@ -290,6 +290,10 @@ app.get("/api/url", async (req, res) => {
   res.json({ ok: true, data: result });
 });
 
-app.listen(PORT, () => {
-  console.log(`ReconX running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`ReconX running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
