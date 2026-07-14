@@ -107,49 +107,181 @@ app.get("/api/ip", async (req, res) => {
   }
 });
 
-// ---------- DOMAIN / WHOIS (RDAP) ----------
+const net = require("net");
+
+// ---------- Raw WHOIS (port 43) — many registries/ccTLDs return a much
+// fuller record here than RDAP does. We chase referrals the same way
+// classic `whois` clients and sites like whois.com do:
+// IANA -> registry whois server -> registrar's own whois server.
+function queryWhoisServer(server, query, timeoutMs = 6000) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: server, port: 43 }, () => {
+      socket.write(query + "\r\n");
+    });
+    let data = "";
+    socket.setTimeout(timeoutMs);
+    socket.on("data", (chunk) => (data += chunk.toString("utf8")));
+    socket.on("end", () => resolve(data));
+    socket.on("close", () => resolve(data));
+    socket.on("timeout", () => {
+      socket.destroy();
+      reject(new Error("WHOIS server timed out"));
+    });
+    socket.on("error", reject);
+  });
+}
+
+function extractReferral(text) {
+  const m = text.match(/(?:Registrar WHOIS Server|Whois Server|ReferralServer|whois):\s*(?:whois:\/\/)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+  return m ? m[1].trim() : null;
+}
+
+// Parses generic "Key: Value" WHOIS text into an object.
+// Repeated keys (Domain Status, Name Server) collect into arrays.
+function parseWhoisText(text) {
+  const fields = {};
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Za-z0-9 /.'-]{2,40}):\s*(.+?)\s*$/);
+    if (!m) continue;
+    const key = m[1].trim();
+    const value = m[2].trim();
+    if (!value || /^(redacted|not disclosed|data protected)/i.test(value)) continue;
+    if (fields[key] === undefined) fields[key] = value;
+    else if (Array.isArray(fields[key])) fields[key].push(value);
+    else fields[key] = [fields[key], value];
+  }
+  return fields;
+}
+
+async function rawWhoisLookup(domain) {
+  const tld = domain.split(".").pop();
+  const chain = [];
+  let text = "";
+  try {
+    text = await queryWhoisServer("whois.iana.org", tld, 5000);
+    chain.push("whois.iana.org");
+    let referral = extractReferral(text);
+    if (referral) {
+      const registryText = await queryWhoisServer(referral, domain, 6000);
+      chain.push(referral);
+      text = registryText;
+      // Follow one more hop to the registrar's own WHOIS server for the fullest record
+      const registrarReferral = extractReferral(registryText);
+      if (registrarReferral && registrarReferral !== referral) {
+        try {
+          const registrarText = await queryWhoisServer(registrarReferral, domain, 6000);
+          chain.push(registrarReferral);
+          if (registrarText && registrarText.length > 40) text = registrarText;
+        } catch {
+          /* registrar server unreachable — keep registry-level data */
+        }
+      }
+    }
+  } catch (err) {
+    if (!text) throw err;
+  }
+  return { raw: text, chain, fields: parseWhoisText(text) };
+}
+
+// ---------- DOMAIN / WHOIS (RDAP + raw WHOIS fallback/merge) ----------
 app.get("/api/whois", async (req, res) => {
   const domain = (req.query.domain || "").trim().toLowerCase();
   if (!domain || !isValidDomain(domain)) {
     return res.status(400).json({ ok: false, error: "Provide a valid domain, e.g. example.com" });
   }
+
+  let rdapData = null;
+  let rdapNameservers = [];
+  let rdapRegistrar = null;
+  let rdapStatus = [];
+  let events = {};
+
   try {
-    const r = await withTimeout(fetch(`https://rdap.org/domain/${domain}`));
-    if (!r.ok) {
-      return res.status(404).json({ ok: false, error: `No RDAP record found (HTTP ${r.status}). The registry may not support RDAP.` });
+    const r = await withTimeout(fetch(`https://rdap.org/domain/${domain}`), 7000);
+    if (r.ok) {
+      rdapData = await r.json();
+      (rdapData.events || []).forEach((e) => (events[e.eventAction] = e.eventDate));
+      rdapNameservers = (rdapData.nameservers || []).map((n) => n.ldhName).filter(Boolean);
+      rdapStatus = rdapData.status || [];
+      (rdapData.entities || []).forEach((e) => {
+        if (e.roles?.includes("registrar")) {
+          const vcard = e.vcardArray?.[1] || [];
+          const fnEntry = vcard.find((v) => v[0] === "fn");
+          rdapRegistrar = fnEntry ? fnEntry[3] : e.handle || null;
+        }
+      });
     }
-    const raw = await r.json();
-
-    const events = {};
-    (raw.events || []).forEach((e) => (events[e.eventAction] = e.eventDate));
-
-    const nameservers = (raw.nameservers || []).map((n) => n.ldhName).filter(Boolean);
-
-    let registrar = null;
-    (raw.entities || []).forEach((e) => {
-      if (e.roles?.includes("registrar")) {
-        const vcard = e.vcardArray?.[1] || [];
-        const fnEntry = vcard.find((v) => v[0] === "fn");
-        registrar = fnEntry ? fnEntry[3] : e.handle || null;
-      }
-    });
-
-    res.json({
-      ok: true,
-      data: {
-        domain: raw.ldhName || domain,
-        status: raw.status || [],
-        registrar,
-        nameservers,
-        created: events.registration || null,
-        updated: events.lastChanged || null,
-        expires: events.expiration || null,
-        raw,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+  } catch {
+    /* RDAP unavailable — raw WHOIS below may still succeed */
   }
+
+  let whois = null;
+  let whoisError = null;
+  try {
+    whois = await withTimeout(rawWhoisLookup(domain), 15000);
+  } catch (err) {
+    whoisError = err.message;
+  }
+
+  if (!rdapData && !whois) {
+    return res.status(404).json({
+      ok: false,
+      error: "No record found via RDAP or WHOIS. The domain may not exist, or its registry blocks automated lookups.",
+    });
+  }
+
+  const f = whois?.fields || {};
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = f[k];
+      if (v) return Array.isArray(v) ? v[0] : v;
+    }
+    return null;
+  };
+  const pickAll = (...keys) => {
+    for (const k of keys) {
+      const v = f[k];
+      if (v) return Array.isArray(v) ? v : [v];
+    }
+    return [];
+  };
+
+  const nameservers = rdapNameservers.length
+    ? rdapNameservers
+    : pickAll("Name Server", "Nameserver", "Nameservers").map((s) => s.toLowerCase());
+
+  const status = rdapStatus.length
+    ? rdapStatus
+    : pickAll("Domain Status", "Status");
+
+  res.json({
+    ok: true,
+    data: {
+      domain: rdapData?.ldhName || pick("Domain Name") || domain,
+      status,
+      registrar: rdapRegistrar || pick("Registrar", "Sponsoring Registrar"),
+      registrarIanaId: pick("Registrar IANA ID"),
+      registrarUrl: pick("Registrar URL"),
+      abuseEmail: pick("Registrar Abuse Contact Email"),
+      abusePhone: pick("Registrar Abuse Contact Phone"),
+      registrantOrg: pick("Registrant Organization"),
+      registrantCountry: pick("Registrant Country"),
+      dnssec: pick("DNSSEC"),
+      nameservers,
+      created: events.registration || pick("Creation Date", "Created On", "Domain Registration Date"),
+      updated: events.lastChanged || pick("Updated Date", "Last Updated On"),
+      expires: events.expiration || pick("Registry Expiry Date", "Expiration Date", "Domain Expiration Date"),
+      sources: {
+        rdap: !!rdapData,
+        whois: !!whois,
+        whoisChain: whois?.chain || [],
+        whoisError: whois ? null : whoisError,
+      },
+      whoisRaw: whois?.raw || null,
+      raw: rdapData || null,
+    },
+  });
 });
 
 // ---------- DNS RECORDS ----------
